@@ -22,10 +22,7 @@ const CanvasPage = () => {
   useEffect(() => {
     if (!id) return;
     const loaded = getDocument(id);
-    if (!loaded) {
-      navigate("/");
-      return;
-    }
+    if (!loaded) { navigate("/"); return; }
     setDoc(loaded);
     if (loaded.bgColor) setBgColor(loaded.bgColor);
   }, [id, navigate]);
@@ -54,6 +51,18 @@ const CanvasPage = () => {
     }
   };
 
+  const handleSelectionStyleChange = useCallback((style: {
+    strokeColor?: string;
+    fontBold?: boolean;
+    fontItalic?: boolean;
+    fontSize?: FontSize;
+  }) => {
+    if (style.strokeColor !== undefined) setStrokeColor(style.strokeColor);
+    if (style.fontBold !== undefined) setFontBold(style.fontBold);
+    if (style.fontItalic !== undefined) setFontItalic(style.fontItalic);
+    if (style.fontSize !== undefined) setFontSize(style.fontSize);
+  }, []);
+
   const handleExport = () => {
     const canvas = document.querySelector("canvas");
     if (!canvas) return;
@@ -67,7 +76,6 @@ const CanvasPage = () => {
 
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden" style={{ backgroundColor: bgColor }}>
-      {/* Top bar */}
       <div className="absolute top-4 left-4 z-20 flex items-center gap-2">
         <button
           onClick={() => navigate("/")}
@@ -80,7 +88,6 @@ const CanvasPage = () => {
         </div>
       </div>
 
-      {/* Export button */}
       <div className="absolute top-4 right-4 z-20">
         <button
           onClick={handleExport}
@@ -91,7 +98,6 @@ const CanvasPage = () => {
         </button>
       </div>
 
-      {/* Toolbar */}
       <Toolbar
         activeTool={activeTool}
         onToolChange={setActiveTool}
@@ -113,7 +119,6 @@ const CanvasPage = () => {
         onBgColorChange={handleBgColorChange}
       />
 
-      {/* Canvas */}
       <CanvasBoard
         elements={doc.elements}
         onElementsChange={handleElementsChange}
@@ -128,6 +133,7 @@ const CanvasPage = () => {
         fontItalic={fontItalic}
         fontSize={fontSize}
         bgColor={bgColor}
+        onSelectionStyleChange={handleSelectionStyleChange}
       />
     </div>
   );
