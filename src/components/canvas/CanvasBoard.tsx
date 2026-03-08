@@ -36,6 +36,7 @@ interface CanvasBoardProps {
     fontItalic?: boolean;
     fontSize?: FontSize;
   }) => void;
+  onEditingTextChange?: (editing: boolean) => void;
 }
 
 interface SelectionRect {
