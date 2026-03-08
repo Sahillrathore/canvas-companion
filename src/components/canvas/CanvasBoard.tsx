@@ -70,6 +70,7 @@ export function CanvasBoard({
   fontSize,
   bgColor,
   onSelectionStyleChange,
+  onEditingTextChange,
 }: CanvasBoardProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
