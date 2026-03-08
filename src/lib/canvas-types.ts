@@ -44,9 +44,19 @@ export interface TextElement extends BaseElement {
   type: "text";
   text: string;
   fontSize: number;
+  fontStyle?: "normal" | "italic";
+  fontWeight?: "normal" | "bold";
 }
 
 export type CanvasElement = PenElement | LineElement | RectangleElement | EllipseElement | TextElement;
+
+export type FontSize = "small" | "medium" | "large";
+
+export const fontSizeMap: Record<FontSize, number> = {
+  small: 16,
+  medium: 24,
+  large: 36,
+};
 
 export interface CanvasDocument {
   id: string;
@@ -55,4 +65,5 @@ export interface CanvasDocument {
   createdAt: number;
   updatedAt: number;
   thumbnail?: string;
+  bgColor?: string;
 }
