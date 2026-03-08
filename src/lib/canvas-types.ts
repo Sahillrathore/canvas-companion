@@ -40,9 +40,17 @@ export interface EllipseElement extends BaseElement {
   fillColor: string;
 }
 
+export interface TextSpan {
+  text: string;
+  bold?: boolean;
+  italic?: boolean;
+  color?: string;
+}
+
 export interface TextElement extends BaseElement {
   type: "text";
   text: string;
+  spans?: TextSpan[];
   fontSize: number;
   fontStyle?: "normal" | "italic";
   fontWeight?: "normal" | "bold";

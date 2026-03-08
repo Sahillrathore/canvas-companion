@@ -18,6 +18,7 @@ const CanvasPage = () => {
   const [fontItalic, setFontItalic] = useState(false);
   const [fontSize, setFontSize] = useState<FontSize>("medium");
   const [bgColor, setBgColor] = useState("#ffffff");
+  const [isEditingText, setIsEditingText] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -117,6 +118,7 @@ const CanvasPage = () => {
         onFontSizeChange={setFontSize}
         bgColor={bgColor}
         onBgColorChange={handleBgColorChange}
+        isEditingText={isEditingText}
       />
 
       <CanvasBoard
@@ -134,6 +136,7 @@ const CanvasPage = () => {
         fontSize={fontSize}
         bgColor={bgColor}
         onSelectionStyleChange={handleSelectionStyleChange}
+        onEditingTextChange={setIsEditingText}
       />
     </div>
   );

@@ -33,6 +33,7 @@ interface ToolbarProps {
   onFontSizeChange: (s: FontSize) => void;
   bgColor: string;
   onBgColorChange: (c: string) => void;
+  isEditingText?: boolean;
 }
 
 const tools: { tool: Tool; icon: React.ElementType; label: string; shortcut: string }[] = [
@@ -61,6 +62,10 @@ const fontSizes: { label: string; value: FontSize }[] = [
   { label: "L", value: "large" },
 ];
 
+function dispatchFormat(type: string, value?: string) {
+  window.dispatchEvent(new CustomEvent("canvas-format", { detail: { type, value } }));
+}
+
 export function Toolbar({
   activeTool,
   onToolChange,
@@ -80,7 +85,29 @@ export function Toolbar({
   onFontSizeChange,
   bgColor,
   onBgColorChange,
+  isEditingText,
 }: ToolbarProps) {
+  const handleBoldClick = () => {
+    if (isEditingText) {
+      dispatchFormat("bold");
+    }
+    onFontBoldChange(!fontBold);
+  };
+
+  const handleItalicClick = () => {
+    if (isEditingText) {
+      dispatchFormat("italic");
+    }
+    onFontItalicChange(!fontItalic);
+  };
+
+  const handleColorChange = (c: string) => {
+    if (isEditingText) {
+      dispatchFormat("color", c);
+    }
+    onStrokeColorChange(c);
+  };
+
   return (
     <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1 rounded-xl bg-toolbar px-2 py-1.5 shadow-lg">
       {/* Undo/Redo */}
@@ -125,7 +152,7 @@ export function Toolbar({
         {colors.map((c) => (
           <button
             key={c}
-            onClick={() => onStrokeColorChange(c)}
+            onClick={() => handleColorChange(c)}
             className={`w-5 h-5 rounded-full border-2 transition-transform ${
               strokeColor === c ? "border-toolbar-active-foreground scale-125" : "border-transparent"
             }`}
@@ -160,24 +187,24 @@ export function Toolbar({
 
       {/* Text style controls */}
       <button
-        onClick={() => onFontBoldChange(!fontBold)}
+        onClick={handleBoldClick}
         className={`flex items-center justify-center w-8 h-8 rounded-md transition-colors ${
           fontBold
             ? "bg-toolbar-active text-toolbar-active-foreground"
             : "text-toolbar-foreground hover:text-toolbar-active-foreground hover:bg-toolbar-active/20"
         }`}
-        title="Bold"
+        title={isEditingText ? "Bold selected text" : "Bold"}
       >
         <Bold className="w-4 h-4" />
       </button>
       <button
-        onClick={() => onFontItalicChange(!fontItalic)}
+        onClick={handleItalicClick}
         className={`flex items-center justify-center w-8 h-8 rounded-md transition-colors ${
           fontItalic
             ? "bg-toolbar-active text-toolbar-active-foreground"
             : "text-toolbar-foreground hover:text-toolbar-active-foreground hover:bg-toolbar-active/20"
         }`}
-        title="Italic"
+        title={isEditingText ? "Italic selected text" : "Italic"}
       >
         <Italic className="w-4 h-4" />
       </button>

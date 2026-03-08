@@ -1,4 +1,4 @@
-import { CanvasElement, PenElement, TextElement } from "./canvas-types";
+import { CanvasElement, TextElement, TextSpan } from "./canvas-types";
 
 interface SelectionRect {
   startX: number;
@@ -26,6 +26,170 @@ function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number)
     }
     lines.push(currentLine);
   }
+  return lines;
+}
+
+/** Get spans from a TextElement, falling back to legacy text field */
+export function getSpans(el: TextElement): TextSpan[] {
+  if (el.spans && el.spans.length > 0) return el.spans;
+  return [{
+    text: el.text,
+    bold: el.fontWeight === "bold",
+    italic: el.fontStyle === "italic",
+    color: el.strokeColor,
+  }];
+}
+
+/** Flatten spans into plain text */
+export function spansToPlainText(spans: TextSpan[]): string {
+  return spans.map(s => s.text).join("");
+}
+
+/** Convert spans to HTML for contenteditable */
+export function spansToHtml(spans: TextSpan[], defaultColor: string): string {
+  return spans.map(span => {
+    const styles: string[] = [];
+    if (span.bold) styles.push("font-weight:bold");
+    if (span.italic) styles.push("font-style:italic");
+    if (span.color && span.color !== defaultColor) styles.push(`color:${span.color}`);
+    const styleAttr = styles.length ? ` style="${styles.join(";")}"` : "";
+    const escaped = span.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>");
+    return `<span${styleAttr}>${escaped}</span>`;
+  }).join("");
+}
+
+/** Parse HTML from contenteditable back into spans */
+export function htmlToSpans(html: string, defaultColor: string, defaultBold: boolean, defaultItalic: boolean): TextSpan[] {
+  const div = document.createElement("div");
+  div.innerHTML = html;
+  const spans: TextSpan[] = [];
+
+  function processNode(node: Node, inheritBold: boolean, inheritItalic: boolean, inheritColor: string) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.textContent || "";
+      if (text) {
+        spans.push({ text, bold: inheritBold, italic: inheritItalic, color: inheritColor });
+      }
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const el = node as HTMLElement;
+    const tag = el.tagName.toLowerCase();
+
+    let bold = inheritBold;
+    let italic = inheritItalic;
+    let color = inheritColor;
+
+    if (tag === "b" || tag === "strong") bold = true;
+    if (tag === "i" || tag === "em") italic = true;
+    if (tag === "br") { spans.push({ text: "\n", bold, italic, color }); return; }
+
+    const style = el.style;
+    if (style.fontWeight === "bold" || style.fontWeight === "700") bold = true;
+    if (style.fontWeight === "normal" || style.fontWeight === "400") bold = false;
+    if (style.fontStyle === "italic") italic = true;
+    if (style.fontStyle === "normal") italic = false;
+    if (style.color) color = style.color;
+
+    if (el.childNodes.length === 0 && tag !== "br") {
+      // Empty element, skip
+      return;
+    }
+
+    for (const child of Array.from(el.childNodes)) {
+      processNode(child, bold, italic, color);
+    }
+
+    // Add newline after block elements
+    if (tag === "div" || tag === "p") {
+      if (spans.length > 0 && spans[spans.length - 1].text !== "\n") {
+        spans.push({ text: "\n", bold: false, italic: false, color: defaultColor });
+      }
+    }
+  }
+
+  for (const child of Array.from(div.childNodes)) {
+    processNode(child, defaultBold, defaultItalic, defaultColor);
+  }
+
+  // Remove trailing newline
+  if (spans.length > 0 && spans[spans.length - 1].text === "\n") {
+    spans.pop();
+  }
+
+  // Merge adjacent spans with same style
+  const merged: TextSpan[] = [];
+  for (const span of spans) {
+    const last = merged[merged.length - 1];
+    if (last && last.bold === span.bold && last.italic === span.italic && last.color === span.color) {
+      last.text += span.text;
+    } else {
+      merged.push({ ...span });
+    }
+  }
+
+  return merged.length > 0 ? merged : [{ text: "", bold: defaultBold, italic: defaultItalic, color: defaultColor }];
+}
+
+/** Word-wrapped rich text line layout for canvas rendering */
+interface RichTextWord {
+  text: string;
+  bold: boolean;
+  italic: boolean;
+  color: string;
+  width: number;
+}
+
+interface RichTextLine {
+  words: RichTextWord[];
+  totalWidth: number;
+}
+
+function layoutRichText(
+  ctx: CanvasRenderingContext2D,
+  spans: TextSpan[],
+  fontSize: number,
+  maxWidth: number,
+  defaultColor: string,
+): RichTextLine[] {
+  const lines: RichTextLine[] = [];
+  let currentLine: RichTextWord[] = [];
+  let lineWidth = 0;
+
+  function getFont(bold: boolean, italic: boolean) {
+    return `${italic ? "italic" : "normal"} ${bold ? "bold" : "normal"} ${fontSize}px sans-serif`;
+  }
+
+  function pushLine() {
+    lines.push({ words: currentLine, totalWidth: lineWidth });
+    currentLine = [];
+    lineWidth = 0;
+  }
+
+  for (const span of spans) {
+    const bold = span.bold ?? false;
+    const italic = span.italic ?? false;
+    const color = span.color || defaultColor;
+    ctx.font = getFont(bold, italic);
+
+    // Split by newlines first
+    const parts = span.text.split("\n");
+    for (let pi = 0; pi < parts.length; pi++) {
+      if (pi > 0) pushLine(); // newline
+
+      const words = parts[pi].split(/( )/); // keep spaces
+      for (const word of words) {
+        if (!word) continue;
+        const w = ctx.measureText(word).width;
+        if (lineWidth + w > maxWidth && currentLine.length > 0 && word.trim()) {
+          pushLine();
+        }
+        currentLine.push({ text: word, bold, italic, color, width: w });
+        lineWidth += w;
+      }
+    }
+  }
+  if (currentLine.length > 0) pushLine();
   return lines;
 }
 
@@ -79,15 +243,20 @@ export function drawElement(ctx: CanvasRenderingContext2D, el: CanvasElement, se
       break;
     }
     case "text": {
-      const weight = el.fontWeight === "bold" ? "bold" : "normal";
-      const style = el.fontStyle === "italic" ? "italic" : "normal";
-      ctx.font = `${style} ${weight} ${el.fontSize}px sans-serif`;
-      ctx.fillStyle = el.strokeColor;
+      const spans = getSpans(el);
       const maxW = el.maxWidth || TEXT_MAX_WIDTH;
-      const lines = wrapText(ctx, el.text, maxW);
+      const lines = layoutRichText(ctx, spans, el.fontSize, maxW, el.strokeColor);
       const lineHeight = el.fontSize * 1.3;
+
       for (let i = 0; i < lines.length; i++) {
-        ctx.fillText(lines[i], el.x, el.y + el.fontSize + i * lineHeight);
+        let x = el.x;
+        const y = el.y + el.fontSize + i * lineHeight;
+        for (const word of lines[i].words) {
+          ctx.font = `${word.italic ? "italic" : "normal"} ${word.bold ? "bold" : "normal"} ${el.fontSize}px sans-serif`;
+          ctx.fillStyle = word.color;
+          ctx.fillText(word.text, x, y);
+          x += word.width;
+        }
       }
       break;
     }
@@ -129,21 +298,18 @@ export function getElementBounds(el: CanvasElement, ctx?: CanvasRenderingContext
       return { x: el.x, y: el.y, w: el.radiusX * 2, h: el.radiusY * 2 };
     case "text": {
       if (ctx) {
-        const weight = el.fontWeight === "bold" ? "bold" : "normal";
-        const style = el.fontStyle === "italic" ? "italic" : "normal";
-        ctx.save();
-        ctx.font = `${style} ${weight} ${el.fontSize}px sans-serif`;
+        const spans = getSpans(el);
         const maxW = el.maxWidth || TEXT_MAX_WIDTH;
-        const lines = wrapText(ctx, el.text, maxW);
+        const lines = layoutRichText(ctx, spans, el.fontSize, maxW, el.strokeColor);
         let maxLineW = 0;
         for (const line of lines) {
-          maxLineW = Math.max(maxLineW, ctx.measureText(line).width);
+          maxLineW = Math.max(maxLineW, line.totalWidth);
         }
-        ctx.restore();
         const lineHeight = el.fontSize * 1.3;
         return { x: el.x, y: el.y, w: maxLineW, h: lines.length * lineHeight };
       }
-      return { x: el.x, y: el.y, w: el.text.length * el.fontSize * 0.6, h: el.fontSize };
+      const plainText = el.spans ? spansToPlainText(el.spans) : el.text;
+      return { x: el.x, y: el.y, w: plainText.length * el.fontSize * 0.6, h: el.fontSize };
     }
   }
 }
