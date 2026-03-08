@@ -90,6 +90,11 @@ export function CanvasBoard({
   }>({ visible: false, x: 0, y: 0, spans: [] });
   const richEditorRef = useRef<HTMLDivElement>(null);
 
+  // Notify parent of editing state
+  useEffect(() => {
+    onEditingTextChange?.(textEdit.visible);
+  }, [textEdit.visible, onEditingTextChange]);
+
   // Zoom & Pan
   const [scale, setScale] = useState(1);
   const [panOffset, setPanOffset] = useState<Point>({ x: 0, y: 0 });
