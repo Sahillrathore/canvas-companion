@@ -46,6 +46,7 @@ export interface TextElement extends BaseElement {
   fontSize: number;
   fontStyle?: "normal" | "italic";
   fontWeight?: "normal" | "bold";
+  maxWidth?: number;
 }
 
 export type CanvasElement = PenElement | LineElement | RectangleElement | EllipseElement | TextElement;
