@@ -1,0 +1,58 @@
+export type Tool = "select" | "pen" | "line" | "rectangle" | "ellipse" | "text" | "eraser";
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
+export interface BaseElement {
+  id: string;
+  type: string;
+  x: number;
+  y: number;
+  strokeColor: string;
+  strokeWidth: number;
+  selected?: boolean;
+}
+
+export interface PenElement extends BaseElement {
+  type: "pen";
+  points: Point[];
+}
+
+export interface LineElement extends BaseElement {
+  type: "line";
+  endX: number;
+  endY: number;
+}
+
+export interface RectangleElement extends BaseElement {
+  type: "rectangle";
+  width: number;
+  height: number;
+  fillColor: string;
+}
+
+export interface EllipseElement extends BaseElement {
+  type: "ellipse";
+  radiusX: number;
+  radiusY: number;
+  fillColor: string;
+}
+
+export interface TextElement extends BaseElement {
+  type: "text";
+  text: string;
+  fontSize: number;
+}
+
+export type CanvasElement = PenElement | LineElement | RectangleElement | EllipseElement | TextElement;
+
+export interface CanvasDocument {
+  id: string;
+  name: string;
+  elements: CanvasElement[];
+  createdAt: number;
+  updatedAt: number;
+  thumbnail?: string;
+}
