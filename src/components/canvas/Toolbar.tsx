@@ -1,4 +1,4 @@
-import { Tool } from "@/lib/canvas-types";
+import { Tool, FontSize } from "@/lib/canvas-types";
 import {
   MousePointer2,
   Pencil,
@@ -7,6 +7,11 @@ import {
   Circle,
   Type,
   Eraser,
+  Undo2,
+  Redo2,
+  Bold,
+  Italic,
+  Paintbrush,
 } from "lucide-react";
 
 interface ToolbarProps {
@@ -16,6 +21,18 @@ interface ToolbarProps {
   onStrokeColorChange: (color: string) => void;
   strokeWidth: number;
   onStrokeWidthChange: (width: number) => void;
+  onUndo: () => void;
+  onRedo: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
+  fontBold: boolean;
+  onFontBoldChange: (v: boolean) => void;
+  fontItalic: boolean;
+  onFontItalicChange: (v: boolean) => void;
+  fontSize: FontSize;
+  onFontSizeChange: (s: FontSize) => void;
+  bgColor: string;
+  onBgColorChange: (c: string) => void;
 }
 
 const tools: { tool: Tool; icon: React.ElementType; label: string; shortcut: string }[] = [
@@ -33,6 +50,17 @@ const colors = [
   "#22c55e", "#3b82f6", "#8b5cf6", "#ec4899",
 ];
 
+const bgColors = [
+  "#ffffff", "#f8fafc", "#fef3c7", "#d1fae5",
+  "#dbeafe", "#fce7f3", "#1e293b", "#0f172a",
+];
+
+const fontSizes: { label: string; value: FontSize }[] = [
+  { label: "S", value: "small" },
+  { label: "M", value: "medium" },
+  { label: "L", value: "large" },
+];
+
 export function Toolbar({
   activeTool,
   onToolChange,
@@ -40,9 +68,41 @@ export function Toolbar({
   onStrokeColorChange,
   strokeWidth,
   onStrokeWidthChange,
+  onUndo,
+  onRedo,
+  canUndo,
+  canRedo,
+  fontBold,
+  onFontBoldChange,
+  fontItalic,
+  onFontItalicChange,
+  fontSize,
+  onFontSizeChange,
+  bgColor,
+  onBgColorChange,
 }: ToolbarProps) {
   return (
     <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1 rounded-xl bg-toolbar px-2 py-1.5 shadow-lg">
+      {/* Undo/Redo */}
+      <button
+        onClick={onUndo}
+        disabled={!canUndo}
+        className="flex items-center justify-center w-9 h-9 rounded-lg text-toolbar-foreground hover:text-toolbar-active-foreground hover:bg-toolbar-active/20 transition-colors disabled:opacity-30 disabled:pointer-events-none"
+        title="Undo (Ctrl+Z)"
+      >
+        <Undo2 className="w-[18px] h-[18px]" />
+      </button>
+      <button
+        onClick={onRedo}
+        disabled={!canRedo}
+        className="flex items-center justify-center w-9 h-9 rounded-lg text-toolbar-foreground hover:text-toolbar-active-foreground hover:bg-toolbar-active/20 transition-colors disabled:opacity-30 disabled:pointer-events-none"
+        title="Redo (Ctrl+Shift+Z)"
+      >
+        <Redo2 className="w-[18px] h-[18px]" />
+      </button>
+
+      <div className="w-px h-6 bg-toolbar-foreground/20 mx-1" />
+
       {tools.map(({ tool, icon: Icon, label, shortcut }) => (
         <button
           key={tool}
@@ -93,6 +153,66 @@ export function Toolbar({
               style={{ width: w + 2, height: w + 2 }}
             />
           </button>
+        ))}
+      </div>
+
+      <div className="w-px h-6 bg-toolbar-foreground/20 mx-1" />
+
+      {/* Text style controls */}
+      <button
+        onClick={() => onFontBoldChange(!fontBold)}
+        className={`flex items-center justify-center w-8 h-8 rounded-md transition-colors ${
+          fontBold
+            ? "bg-toolbar-active text-toolbar-active-foreground"
+            : "text-toolbar-foreground hover:text-toolbar-active-foreground hover:bg-toolbar-active/20"
+        }`}
+        title="Bold"
+      >
+        <Bold className="w-4 h-4" />
+      </button>
+      <button
+        onClick={() => onFontItalicChange(!fontItalic)}
+        className={`flex items-center justify-center w-8 h-8 rounded-md transition-colors ${
+          fontItalic
+            ? "bg-toolbar-active text-toolbar-active-foreground"
+            : "text-toolbar-foreground hover:text-toolbar-active-foreground hover:bg-toolbar-active/20"
+        }`}
+        title="Italic"
+      >
+        <Italic className="w-4 h-4" />
+      </button>
+      <div className="flex items-center gap-0.5">
+        {fontSizes.map(({ label, value }) => (
+          <button
+            key={value}
+            onClick={() => onFontSizeChange(value)}
+            className={`flex items-center justify-center w-7 h-7 rounded-md text-xs font-semibold transition-colors ${
+              fontSize === value
+                ? "bg-toolbar-active text-toolbar-active-foreground"
+                : "text-toolbar-foreground hover:text-toolbar-active-foreground hover:bg-toolbar-active/20"
+            }`}
+            title={`Font size: ${label}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div className="w-px h-6 bg-toolbar-foreground/20 mx-1" />
+
+      {/* Background color */}
+      <div className="flex items-center gap-1">
+        <Paintbrush className="w-3.5 h-3.5 text-toolbar-foreground mr-0.5" />
+        {bgColors.map((c) => (
+          <button
+            key={c}
+            onClick={() => onBgColorChange(c)}
+            className={`w-4 h-4 rounded border transition-transform ${
+              bgColor === c ? "border-toolbar-active-foreground scale-125" : "border-toolbar-foreground/30"
+            }`}
+            style={{ backgroundColor: c }}
+            title="Canvas background"
+          />
         ))}
       </div>
     </div>

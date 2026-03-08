@@ -8,6 +8,8 @@ import {
   RectangleElement,
   EllipseElement,
   TextElement,
+  FontSize,
+  fontSizeMap,
 } from "@/lib/canvas-types";
 import { generateId } from "@/lib/canvas-store";
 
@@ -18,6 +20,20 @@ interface CanvasBoardProps {
   strokeColor: string;
   strokeWidth: number;
   onToolChange: (tool: Tool) => void;
+  onUndo: () => void;
+  onRedo: () => void;
+  pushHistory: () => void;
+  fontBold: boolean;
+  fontItalic: boolean;
+  fontSize: FontSize;
+  bgColor: string;
+}
+
+interface SelectionRect {
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
 }
 
 function drawElement(ctx: CanvasRenderingContext2D, el: CanvasElement, selected: boolean) {
@@ -60,9 +76,7 @@ function drawElement(ctx: CanvasRenderingContext2D, el: CanvasElement, selected:
         el.y + el.radiusY,
         Math.abs(el.radiusX),
         Math.abs(el.radiusY),
-        0,
-        0,
-        Math.PI * 2
+        0, 0, Math.PI * 2
       );
       if (el.fillColor && el.fillColor !== "transparent") {
         ctx.fillStyle = el.fillColor;
@@ -72,7 +86,9 @@ function drawElement(ctx: CanvasRenderingContext2D, el: CanvasElement, selected:
       break;
     }
     case "text": {
-      ctx.font = `${el.fontSize}px sans-serif`;
+      const weight = el.fontWeight === "bold" ? "bold" : "normal";
+      const style = el.fontStyle === "italic" ? "italic" : "normal";
+      ctx.font = `${style} ${weight} ${el.fontSize}px sans-serif`;
       ctx.fillStyle = el.strokeColor;
       ctx.fillText(el.text, el.x, el.y + el.fontSize);
       break;
@@ -121,12 +137,17 @@ function getElementBounds(el: CanvasElement): { x: number; y: number; w: number;
 function hitTest(el: CanvasElement, px: number, py: number): boolean {
   const b = getElementBounds(el);
   const pad = 8;
-  return (
-    px >= b.x - pad &&
-    px <= b.x + b.w + pad &&
-    py >= b.y - pad &&
-    py <= b.y + b.h + pad
-  );
+  return px >= b.x - pad && px <= b.x + b.w + pad && py >= b.y - pad && py <= b.y + b.h + pad;
+}
+
+function isInSelectionRect(el: CanvasElement, rect: SelectionRect): boolean {
+  const b = getElementBounds(el);
+  const sx = Math.min(rect.startX, rect.endX);
+  const sy = Math.min(rect.startY, rect.endY);
+  const sw = Math.abs(rect.endX - rect.startX);
+  const sh = Math.abs(rect.endY - rect.startY);
+  // Element overlaps selection rect
+  return !(b.x + b.w < sx || b.x > sx + sw || b.y + b.h < sy || b.y > sy + sh);
 }
 
 export function CanvasBoard({
@@ -136,6 +157,13 @@ export function CanvasBoard({
   strokeColor,
   strokeWidth,
   onToolChange,
+  onUndo,
+  onRedo,
+  pushHistory,
+  fontBold,
+  fontItalic,
+  fontSize,
+  bgColor,
 }: CanvasBoardProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -143,10 +171,9 @@ export function CanvasBoard({
   const [currentElement, setCurrentElement] = useState<CanvasElement | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [dragStart, setDragStart] = useState<Point | null>(null);
+  const [selectionRect, setSelectionRect] = useState<SelectionRect | null>(null);
   const [textInput, setTextInput] = useState<{ x: number; y: number; visible: boolean }>({
-    x: 0,
-    y: 0,
-    visible: false,
+    x: 0, y: 0, visible: false,
   });
   const [textValue, setTextValue] = useState("");
   const textInputRef = useRef<HTMLInputElement>(null);
@@ -180,13 +207,12 @@ export function CanvasBoard({
     const w = container.clientWidth;
     const h = container.clientHeight;
 
-    ctx.clearRect(0, 0, w, h);
+    // Background
+    ctx.fillStyle = bgColor;
+    ctx.fillRect(0, 0, w, h);
 
-    // Draw dot grid
-    ctx.fillStyle = getComputedStyle(document.documentElement)
-      .getPropertyValue("--canvas-dot")
-      ? "#dde1e7"
-      : "#dde1e7";
+    // Dot grid
+    ctx.fillStyle = "#dde1e7";
     const spacing = 20;
     for (let x = spacing; x < w; x += spacing) {
       for (let y = spacing; y < h; y += spacing) {
@@ -202,7 +228,23 @@ export function CanvasBoard({
     if (currentElement) {
       drawElement(ctx, currentElement, false);
     }
-  }, [elements, currentElement, selectedIds]);
+
+    // Draw selection rectangle
+    if (selectionRect) {
+      ctx.save();
+      ctx.strokeStyle = "#3b82f6";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.fillStyle = "rgba(59, 130, 246, 0.08)";
+      const rx = Math.min(selectionRect.startX, selectionRect.endX);
+      const ry = Math.min(selectionRect.startY, selectionRect.endY);
+      const rw = Math.abs(selectionRect.endX - selectionRect.startX);
+      const rh = Math.abs(selectionRect.endY - selectionRect.startY);
+      ctx.fillRect(rx, ry, rw, rh);
+      ctx.strokeRect(rx, ry, rw, rh);
+      ctx.restore();
+    }
+  }, [elements, currentElement, selectedIds, selectionRect, bgColor]);
 
   useEffect(() => {
     redraw();
@@ -212,6 +254,20 @@ export function CanvasBoard({
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (textInput.visible) return;
+
+      // Undo/Redo
+      if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        onUndo();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === "Z" || (e.key === "z" && e.shiftKey))) {
+        e.preventDefault();
+        onRedo();
+        return;
+      }
+      if (e.ctrlKey || e.metaKey) return;
+
       const key = e.key.toLowerCase();
       if (key === "v") onToolChange("select");
       else if (key === "p") onToolChange("pen");
@@ -223,16 +279,18 @@ export function CanvasBoard({
       else if (key === "delete" || key === "backspace") {
         if (selectedIds.size > 0) {
           e.preventDefault();
+          pushHistory();
           onElementsChange(elements.filter((el) => !selectedIds.has(el.id)));
           setSelectedIds(new Set());
         }
       } else if (key === "escape") {
         setSelectedIds(new Set());
+        setSelectionRect(null);
       }
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [activeTool, selectedIds, elements, onElementsChange, onToolChange, textInput.visible]);
+  }, [activeTool, selectedIds, elements, onElementsChange, onToolChange, textInput.visible, onUndo, onRedo, pushHistory]);
 
   const getCanvasPoint = (e: React.MouseEvent): Point => {
     const canvas = canvasRef.current!;
@@ -244,7 +302,7 @@ export function CanvasBoard({
     const point = getCanvasPoint(e);
 
     if (activeTool === "select") {
-      // Check hit
+      // Check hit on existing element
       let hit: CanvasElement | null = null;
       for (let i = elements.length - 1; i >= 0; i--) {
         if (hitTest(elements[i], point.x, point.y)) {
@@ -256,7 +314,9 @@ export function CanvasBoard({
         setSelectedIds(new Set([hit.id]));
         setDragStart(point);
       } else {
+        // Start area selection
         setSelectedIds(new Set());
+        setSelectionRect({ startX: point.x, startY: point.y, endX: point.x, endY: point.y });
       }
       return;
     }
@@ -264,6 +324,7 @@ export function CanvasBoard({
     if (activeTool === "eraser") {
       for (let i = elements.length - 1; i >= 0; i--) {
         if (hitTest(elements[i], point.x, point.y)) {
+          pushHistory();
           onElementsChange(elements.filter((_, idx) => idx !== i));
           break;
         }
@@ -279,54 +340,30 @@ export function CanvasBoard({
     }
 
     setIsDrawing(true);
+    pushHistory();
 
     if (activeTool === "pen") {
       const el: PenElement = {
-        id: generateId(),
-        type: "pen",
-        x: point.x,
-        y: point.y,
-        points: [point],
-        strokeColor,
-        strokeWidth,
+        id: generateId(), type: "pen", x: point.x, y: point.y,
+        points: [point], strokeColor, strokeWidth,
       };
       setCurrentElement(el);
     } else if (activeTool === "line") {
       const el: LineElement = {
-        id: generateId(),
-        type: "line",
-        x: point.x,
-        y: point.y,
-        endX: point.x,
-        endY: point.y,
-        strokeColor,
-        strokeWidth,
+        id: generateId(), type: "line", x: point.x, y: point.y,
+        endX: point.x, endY: point.y, strokeColor, strokeWidth,
       };
       setCurrentElement(el);
     } else if (activeTool === "rectangle") {
       const el: RectangleElement = {
-        id: generateId(),
-        type: "rectangle",
-        x: point.x,
-        y: point.y,
-        width: 0,
-        height: 0,
-        strokeColor,
-        strokeWidth,
-        fillColor: "transparent",
+        id: generateId(), type: "rectangle", x: point.x, y: point.y,
+        width: 0, height: 0, strokeColor, strokeWidth, fillColor: "transparent",
       };
       setCurrentElement(el);
     } else if (activeTool === "ellipse") {
       const el: EllipseElement = {
-        id: generateId(),
-        type: "ellipse",
-        x: point.x,
-        y: point.y,
-        radiusX: 0,
-        radiusY: 0,
-        strokeColor,
-        strokeWidth,
-        fillColor: "transparent",
+        id: generateId(), type: "ellipse", x: point.x, y: point.y,
+        radiusX: 0, radiusY: 0, strokeColor, strokeWidth, fillColor: "transparent",
       };
       setCurrentElement(el);
     }
@@ -334,6 +371,12 @@ export function CanvasBoard({
 
   const handleMouseMove = (e: React.MouseEvent) => {
     const point = getCanvasPoint(e);
+
+    // Area selection drag
+    if (activeTool === "select" && selectionRect && !dragStart) {
+      setSelectionRect({ ...selectionRect, endX: point.x, endY: point.y });
+      return;
+    }
 
     // Dragging selected elements
     if (activeTool === "select" && dragStart && selectedIds.size > 0) {
@@ -347,10 +390,7 @@ export function CanvasBoard({
           if (moved.type === "pen") {
             return {
               ...moved,
-              points: (el as PenElement).points.map((p) => ({
-                x: p.x + dx,
-                y: p.y + dy,
-              })),
+              points: (el as PenElement).points.map((p) => ({ x: p.x + dx, y: p.y + dy })),
             } as PenElement;
           }
           if (moved.type === "line") {
@@ -369,32 +409,25 @@ export function CanvasBoard({
     if (!isDrawing || !currentElement) return;
 
     if (currentElement.type === "pen") {
-      setCurrentElement({
-        ...currentElement,
-        points: [...currentElement.points, point],
-      });
+      setCurrentElement({ ...currentElement, points: [...currentElement.points, point] });
     } else if (currentElement.type === "line") {
-      setCurrentElement({
-        ...currentElement,
-        endX: point.x,
-        endY: point.y,
-      });
+      setCurrentElement({ ...currentElement, endX: point.x, endY: point.y });
     } else if (currentElement.type === "rectangle") {
-      setCurrentElement({
-        ...currentElement,
-        width: point.x - currentElement.x,
-        height: point.y - currentElement.y,
-      });
+      setCurrentElement({ ...currentElement, width: point.x - currentElement.x, height: point.y - currentElement.y });
     } else if (currentElement.type === "ellipse") {
       setCurrentElement({
-        ...currentElement,
-        radiusX: (point.x - currentElement.x) / 2,
-        radiusY: (point.y - currentElement.y) / 2,
+        ...currentElement, radiusX: (point.x - currentElement.x) / 2, radiusY: (point.y - currentElement.y) / 2,
       } as EllipseElement);
     }
   };
 
   const handleMouseUp = () => {
+    // Finish area selection
+    if (selectionRect) {
+      const selected = elements.filter((el) => isInSelectionRect(el, selectionRect));
+      setSelectedIds(new Set(selected.map((el) => el.id)));
+      setSelectionRect(null);
+    }
     if (dragStart) {
       setDragStart(null);
     }
@@ -407,15 +440,12 @@ export function CanvasBoard({
 
   const handleTextSubmit = () => {
     if (textValue.trim()) {
+      pushHistory();
       const el: TextElement = {
-        id: generateId(),
-        type: "text",
-        x: textInput.x,
-        y: textInput.y,
-        text: textValue,
-        fontSize: 20,
-        strokeColor,
-        strokeWidth,
+        id: generateId(), type: "text", x: textInput.x, y: textInput.y,
+        text: textValue, fontSize: fontSizeMap[fontSize], strokeColor, strokeWidth,
+        fontWeight: fontBold ? "bold" : "normal",
+        fontStyle: fontItalic ? "italic" : "normal",
       };
       onElementsChange([...elements, el]);
     }
@@ -424,23 +454,20 @@ export function CanvasBoard({
   };
 
   return (
-    <div ref={containerRef} className="w-full h-full relative bg-canvas overflow-hidden">
+    <div ref={containerRef} className="w-full h-full relative overflow-hidden" style={{ backgroundColor: bgColor }}>
       <canvas
         ref={canvasRef}
-        className="absolute inset-0 cursor-crosshair"
+        className="absolute inset-0"
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
         style={{
           cursor:
-            activeTool === "select"
-              ? "default"
-              : activeTool === "text"
-              ? "text"
-              : activeTool === "eraser"
-              ? "pointer"
-              : "crosshair",
+            activeTool === "select" ? "default"
+            : activeTool === "text" ? "text"
+            : activeTool === "eraser" ? "pointer"
+            : "crosshair",
         }}
       />
       {textInput.visible && (
@@ -457,8 +484,15 @@ export function CanvasBoard({
             }
           }}
           onBlur={handleTextSubmit}
-          className="absolute z-30 border-2 border-primary bg-card px-2 py-1 text-foreground outline-none rounded-md text-base"
-          style={{ left: textInput.x, top: textInput.y, minWidth: 120 }}
+          className="absolute z-30 border-2 border-primary bg-card px-2 py-1 text-foreground outline-none rounded-md"
+          style={{
+            left: textInput.x,
+            top: textInput.y,
+            minWidth: 120,
+            fontSize: fontSizeMap[fontSize],
+            fontWeight: fontBold ? "bold" : "normal",
+            fontStyle: fontItalic ? "italic" : "normal",
+          }}
           placeholder="Type text..."
         />
       )}
