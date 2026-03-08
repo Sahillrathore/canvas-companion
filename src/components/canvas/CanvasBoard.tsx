@@ -8,11 +8,13 @@ import {
   RectangleElement,
   EllipseElement,
   TextElement,
+  TextSpan,
   FontSize,
   fontSizeMap,
 } from "@/lib/canvas-types";
 import { generateId } from "@/lib/canvas-store";
-import { drawElement, hitTest, isInSelectionRect, getElementBounds } from "@/lib/canvas-drawing";
+import { drawElement, hitTest, isInSelectionRect, getSpans, spansToPlainText } from "@/lib/canvas-drawing";
+import { RichTextEditor } from "./RichTextEditor";
 
 interface CanvasBoardProps {
   elements: CanvasElement[];
@@ -75,11 +77,16 @@ export function CanvasBoard({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [dragStart, setDragStart] = useState<Point | null>(null);
   const [selectionRect, setSelectionRect] = useState<SelectionRect | null>(null);
-  const [textInput, setTextInput] = useState<{ x: number; y: number; visible: boolean; editId?: string }>({
-    x: 0, y: 0, visible: false,
-  });
-  const [textValue, setTextValue] = useState("");
-  const textInputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Rich text editor state
+  const [textEdit, setTextEdit] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    editId?: string;
+    spans: TextSpan[];
+  }>({ visible: false, x: 0, y: 0, spans: [] });
+  const richEditorRef = useRef<HTMLDivElement>(null);
 
   // Zoom & Pan
   const [scale, setScale] = useState(1);
@@ -91,10 +98,10 @@ export function CanvasBoard({
   // Track previous style props to apply to selection
   const prevStyleRef = useRef({ strokeColor, fontBold, fontItalic, fontSize });
 
-  // Apply style changes to selected text elements
+  // Apply style changes to selected NON-text elements (text uses contenteditable)
   useEffect(() => {
     const prev = prevStyleRef.current;
-    if (selectedIds.size === 0) {
+    if (selectedIds.size === 0 || textEdit.visible) {
       prevStyleRef.current = { strokeColor, fontBold, fontItalic, fontSize };
       return;
     }
@@ -112,22 +119,38 @@ export function CanvasBoard({
     const updated = elements.map((el) => {
       if (!selectedIds.has(el.id)) return el;
       didChange = true;
-      const base = { ...el, strokeColor };
       if (el.type === "text") {
+        // For text elements, apply formatting to all spans
+        const spans = getSpans(el);
+        const newSpans = spans.map(span => ({
+          ...span,
+          bold: fontBold,
+          italic: fontItalic,
+          color: strokeColor,
+        }));
         return {
-          ...base,
+          ...el,
+          strokeColor,
+          spans: newSpans,
+          text: spansToPlainText(newSpans),
           fontWeight: fontBold ? "bold" : "normal",
           fontStyle: fontItalic ? "italic" : "normal",
           fontSize: fontSizeMap[fontSize],
         } as TextElement;
       }
-      return base;
+      return { ...el, strokeColor };
     });
     if (didChange) {
       pushHistory();
       onElementsChange(updated);
     }
   }, [strokeColor, fontBold, fontItalic, fontSize, selectedIds]);
+
+  // Apply bold/italic/color to selected text inside contenteditable
+  useEffect(() => {
+    if (!textEdit.visible || !richEditorRef.current) return;
+    // This is handled by the toolbar buttons applying execCommand
+  }, [strokeColor, fontBold, fontItalic]);
 
   // When selection changes, sync toolbar to selected element style
   useEffect(() => {
@@ -177,11 +200,9 @@ export function CanvasBoard({
     const h = container.clientHeight;
 
     ctx.save();
-    // Clear
     ctx.fillStyle = bgColor;
     ctx.fillRect(0, 0, w, h);
 
-    // Dot grid (in screen space)
     ctx.fillStyle = "#dde1e7";
     const spacing = 20;
     const gridOffX = (panOffset.x % (spacing * scale) + spacing * scale) % (spacing * scale);
@@ -194,18 +215,18 @@ export function CanvasBoard({
       }
     }
 
-    // Apply transform
     ctx.translate(panOffset.x, panOffset.y);
     ctx.scale(scale, scale);
 
     for (const el of elements) {
+      // Hide text being edited
+      if (textEdit.visible && textEdit.editId === el.id) continue;
       drawElement(ctx, el, selectedIds.has(el.id));
     }
     if (currentElement) {
       drawElement(ctx, currentElement, false);
     }
 
-    // Selection rectangle (in canvas coords)
     if (selectionRect) {
       ctx.strokeStyle = "#3b82f6";
       ctx.lineWidth = 1 / scale;
@@ -221,7 +242,7 @@ export function CanvasBoard({
     }
 
     ctx.restore();
-  }, [elements, currentElement, selectedIds, selectionRect, bgColor, scale, panOffset]);
+  }, [elements, currentElement, selectedIds, selectionRect, bgColor, scale, panOffset, textEdit]);
 
   useEffect(() => {
     redraw();
@@ -230,12 +251,12 @@ export function CanvasBoard({
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === "Space" && !textInput.visible) {
+      if (e.code === "Space" && !textEdit.visible) {
         e.preventDefault();
         setSpaceHeld(true);
         return;
       }
-      if (textInput.visible) return;
+      if (textEdit.visible) return;
 
       if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
         e.preventDefault(); onUndo(); return;
@@ -290,7 +311,7 @@ export function CanvasBoard({
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [activeTool, selectedIds, elements, onElementsChange, onToolChange, textInput.visible, onUndo, onRedo, pushHistory]);
+  }, [activeTool, selectedIds, elements, onElementsChange, onToolChange, textEdit.visible, onUndo, onRedo, pushHistory]);
 
   // Wheel zoom
   useEffect(() => {
@@ -311,7 +332,6 @@ export function CanvasBoard({
         });
         setScale(newScale);
       } else {
-        // Pan with wheel
         setPanOffset((p) => ({ x: p.x - e.deltaX, y: p.y - e.deltaY }));
       }
     };
@@ -338,7 +358,6 @@ export function CanvasBoard({
   const getCtx = () => canvasRef.current?.getContext("2d") ?? null;
 
   const handleMouseDown = (e: React.MouseEvent) => {
-    // Space+drag = pan
     if (spaceHeld || e.button === 1) {
       setIsPanning(true);
       setPanStart({ x: e.clientX, y: e.clientY });
@@ -377,9 +396,13 @@ export function CanvasBoard({
     }
 
     if (activeTool === "text") {
-      setTextInput({ x: point.x, y: point.y, visible: true });
-      setTextValue("");
-      setTimeout(() => textInputRef.current?.focus(), 50);
+      // Create new text
+      setTextEdit({
+        visible: true,
+        x: point.x,
+        y: point.y,
+        spans: [{ text: "", bold: fontBold, italic: fontItalic, color: strokeColor }],
+      });
       return;
     }
 
@@ -410,7 +433,6 @@ export function CanvasBoard({
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    // Panning
     if (isPanning && panStart) {
       const dx = e.clientX - panStart.x;
       const dy = e.clientY - panStart.y;
@@ -485,53 +507,101 @@ export function CanvasBoard({
     for (let i = elements.length - 1; i >= 0; i--) {
       const el = elements[i];
       if (el.type === "text" && hitTest(el, point.x, point.y, ctx ?? undefined)) {
-        setTextInput({ x: el.x, y: el.y, visible: true, editId: el.id });
-        setTextValue(el.text);
+        const spans = getSpans(el);
+        setTextEdit({
+          visible: true,
+          x: el.x,
+          y: el.y,
+          editId: el.id,
+          spans,
+        });
         setSelectedIds(new Set([el.id]));
-        setTimeout(() => textInputRef.current?.focus(), 50);
         return;
       }
     }
   };
 
-  const handleTextSubmit = () => {
-    if (textInput.editId) {
-      // Editing existing text
-      if (textValue.trim()) {
+  const handleTextSave = useCallback((spans: TextSpan[], plainText: string) => {
+    if (textEdit.editId) {
+      if (plainText.trim()) {
         pushHistory();
         onElementsChange(
           elements.map((el) =>
-            el.id === textInput.editId && el.type === "text"
-              ? { ...el, text: textValue } as TextElement
+            el.id === textEdit.editId && el.type === "text"
+              ? { ...el, spans, text: plainText } as TextElement
               : el
           )
         );
       } else {
-        // Empty = delete
         pushHistory();
-        onElementsChange(elements.filter((el) => el.id !== textInput.editId));
+        onElementsChange(elements.filter((el) => el.id !== textEdit.editId));
       }
-    } else if (textValue.trim()) {
+    } else if (plainText.trim()) {
       pushHistory();
       const el: TextElement = {
-        id: generateId(), type: "text", x: textInput.x, y: textInput.y,
-        text: textValue, fontSize: fontSizeMap[fontSize], strokeColor, strokeWidth,
+        id: generateId(), type: "text", x: textEdit.x, y: textEdit.y,
+        text: plainText, spans, fontSize: fontSizeMap[fontSize], strokeColor, strokeWidth,
         fontWeight: fontBold ? "bold" : "normal",
         fontStyle: fontItalic ? "italic" : "normal",
       };
       onElementsChange([...elements, el]);
     }
-    setTextInput({ x: 0, y: 0, visible: false });
-    setTextValue("");
-  };
+    setTextEdit({ visible: false, x: 0, y: 0, spans: [] });
+  }, [textEdit, elements, onElementsChange, pushHistory, fontSize, strokeColor, strokeWidth, fontBold, fontItalic]);
 
-  const textScreenPos = canvasToScreen({ x: textInput.x, y: textInput.y });
+  const handleTextCancel = useCallback(() => {
+    setTextEdit({ visible: false, x: 0, y: 0, spans: [] });
+  }, []);
 
-  // Determine current editing text element for styling the textarea
-  const editingEl = textInput.editId ? elements.find((e) => e.id === textInput.editId) as TextElement | undefined : undefined;
+  // Apply formatting from toolbar to contenteditable selection
+  useEffect(() => {
+    if (!textEdit.visible || !richEditorRef.current) return;
+    // We expose execCommand helpers via toolbar callbacks
+  }, [textEdit.visible]);
+
+  // Expose formatting commands for the toolbar to use on contenteditable
+  const applyBoldToEditor = useCallback(() => {
+    if (textEdit.visible && richEditorRef.current) {
+      richEditorRef.current.focus();
+      document.execCommand("bold");
+    }
+  }, [textEdit.visible]);
+
+  const applyItalicToEditor = useCallback(() => {
+    if (textEdit.visible && richEditorRef.current) {
+      richEditorRef.current.focus();
+      document.execCommand("italic");
+    }
+  }, [textEdit.visible]);
+
+  const applyColorToEditor = useCallback((color: string) => {
+    if (textEdit.visible && richEditorRef.current) {
+      richEditorRef.current.focus();
+      document.execCommand("foreColor", false, color);
+    }
+  }, [textEdit.visible]);
+
+  // Store these on a ref so toolbar can call them
+  const formattingRef = useRef({ applyBold: applyBoldToEditor, applyItalic: applyItalicToEditor, applyColor: applyColorToEditor });
+  formattingRef.current = { applyBold: applyBoldToEditor, applyItalic: applyItalicToEditor, applyColor: applyColorToEditor };
+
+  // Listen for custom events from toolbar for formatting while editing
+  useEffect(() => {
+    const handleFormat = (e: CustomEvent) => {
+      const { type, value } = e.detail;
+      if (type === "bold") formattingRef.current.applyBold();
+      else if (type === "italic") formattingRef.current.applyItalic();
+      else if (type === "color") formattingRef.current.applyColor(value);
+    };
+    window.addEventListener("canvas-format" as any, handleFormat as any);
+    return () => window.removeEventListener("canvas-format" as any, handleFormat as any);
+  }, []);
+
+  const textScreenPos = canvasToScreen({ x: textEdit.x, y: textEdit.y });
+
+  // Get editing element info
+  const editingEl = textEdit.editId ? elements.find((e) => e.id === textEdit.editId) as TextElement | undefined : undefined;
   const currentFontSize = editingEl ? editingEl.fontSize : fontSizeMap[fontSize];
-  const currentBold = editingEl ? editingEl.fontWeight === "bold" : fontBold;
-  const currentItalic = editingEl ? editingEl.fontStyle === "italic" : fontItalic;
 
   return (
     <div ref={containerRef} className="w-full h-full relative overflow-hidden" style={{ backgroundColor: bgColor }}>
@@ -552,32 +622,19 @@ export function CanvasBoard({
             : "crosshair",
         }}
       />
-      {textInput.visible && (
-        <textarea
-          ref={textInputRef}
-          value={textValue}
-          onChange={(e) => setTextValue(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleTextSubmit(); }
-            if (e.key === "Escape") {
-              setTextInput({ x: 0, y: 0, visible: false });
-              setTextValue("");
-            }
-          }}
-          onBlur={handleTextSubmit}
-          className="absolute z-30 border-2 border-primary bg-card px-2 py-1 text-foreground outline-none rounded-md resize-none"
-          style={{
-            left: textScreenPos.x,
-            top: textScreenPos.y,
-            minWidth: 150,
-            maxWidth: 400,
-            minHeight: 36,
-            fontSize: currentFontSize * scale,
-            fontWeight: currentBold ? "bold" : "normal",
-            fontStyle: currentItalic ? "italic" : "normal",
-            transformOrigin: "top left",
-          }}
-          placeholder="Type text... (Shift+Enter for new line)"
+      {textEdit.visible && (
+        <RichTextEditor
+          spans={textEdit.spans}
+          defaultColor={editingEl?.strokeColor ?? strokeColor}
+          defaultBold={editingEl ? editingEl.fontWeight === "bold" : fontBold}
+          defaultItalic={editingEl ? editingEl.fontStyle === "italic" : fontItalic}
+          fontSize={currentFontSize}
+          scale={scale}
+          screenX={textScreenPos.x}
+          screenY={textScreenPos.y}
+          onSave={handleTextSave}
+          onCancel={handleTextCancel}
+          editorRef={richEditorRef}
         />
       )}
 
