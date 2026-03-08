@@ -12,6 +12,7 @@ import {
   fontSizeMap,
 } from "@/lib/canvas-types";
 import { generateId } from "@/lib/canvas-store";
+import { drawElement, hitTest, isInSelectionRect, getElementBounds } from "@/lib/canvas-drawing";
 
 interface CanvasBoardProps {
   elements: CanvasElement[];
@@ -27,6 +28,12 @@ interface CanvasBoardProps {
   fontItalic: boolean;
   fontSize: FontSize;
   bgColor: string;
+  onSelectionStyleChange?: (style: {
+    strokeColor?: string;
+    fontBold?: boolean;
+    fontItalic?: boolean;
+    fontSize?: FontSize;
+  }) => void;
 }
 
 interface SelectionRect {
@@ -36,119 +43,14 @@ interface SelectionRect {
   endY: number;
 }
 
-function drawElement(ctx: CanvasRenderingContext2D, el: CanvasElement, selected: boolean) {
-  ctx.save();
-  ctx.strokeStyle = el.strokeColor;
-  ctx.lineWidth = el.strokeWidth;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
+const MIN_SCALE = 0.1;
+const MAX_SCALE = 5;
 
-  switch (el.type) {
-    case "pen": {
-      if (el.points.length < 2) break;
-      ctx.beginPath();
-      ctx.moveTo(el.points[0].x, el.points[0].y);
-      for (let i = 1; i < el.points.length; i++) {
-        ctx.lineTo(el.points[i].x, el.points[i].y);
-      }
-      ctx.stroke();
-      break;
-    }
-    case "line": {
-      ctx.beginPath();
-      ctx.moveTo(el.x, el.y);
-      ctx.lineTo(el.endX, el.endY);
-      ctx.stroke();
-      break;
-    }
-    case "rectangle": {
-      if (el.fillColor && el.fillColor !== "transparent") {
-        ctx.fillStyle = el.fillColor;
-        ctx.fillRect(el.x, el.y, el.width, el.height);
-      }
-      ctx.strokeRect(el.x, el.y, el.width, el.height);
-      break;
-    }
-    case "ellipse": {
-      ctx.beginPath();
-      ctx.ellipse(
-        el.x + el.radiusX,
-        el.y + el.radiusY,
-        Math.abs(el.radiusX),
-        Math.abs(el.radiusY),
-        0, 0, Math.PI * 2
-      );
-      if (el.fillColor && el.fillColor !== "transparent") {
-        ctx.fillStyle = el.fillColor;
-        ctx.fill();
-      }
-      ctx.stroke();
-      break;
-    }
-    case "text": {
-      const weight = el.fontWeight === "bold" ? "bold" : "normal";
-      const style = el.fontStyle === "italic" ? "italic" : "normal";
-      ctx.font = `${style} ${weight} ${el.fontSize}px sans-serif`;
-      ctx.fillStyle = el.strokeColor;
-      ctx.fillText(el.text, el.x, el.y + el.fontSize);
-      break;
-    }
-  }
-
-  if (selected) {
-    const bounds = getElementBounds(el);
-    ctx.strokeStyle = "#3b82f6";
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([5, 5]);
-    ctx.strokeRect(bounds.x - 4, bounds.y - 4, bounds.w + 8, bounds.h + 8);
-    ctx.setLineDash([]);
-  }
-
-  ctx.restore();
-}
-
-function getElementBounds(el: CanvasElement): { x: number; y: number; w: number; h: number } {
-  switch (el.type) {
-    case "pen": {
-      if (el.points.length === 0) return { x: el.x, y: el.y, w: 0, h: 0 };
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      for (const p of el.points) {
-        minX = Math.min(minX, p.x);
-        minY = Math.min(minY, p.y);
-        maxX = Math.max(maxX, p.x);
-        maxY = Math.max(maxY, p.y);
-      }
-      return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
-    }
-    case "line": {
-      const minX = Math.min(el.x, el.endX);
-      const minY = Math.min(el.y, el.endY);
-      return { x: minX, y: minY, w: Math.abs(el.endX - el.x), h: Math.abs(el.endY - el.y) };
-    }
-    case "rectangle":
-      return { x: el.x, y: el.y, w: el.width, h: el.height };
-    case "ellipse":
-      return { x: el.x, y: el.y, w: el.radiusX * 2, h: el.radiusY * 2 };
-    case "text":
-      return { x: el.x, y: el.y, w: el.text.length * el.fontSize * 0.6, h: el.fontSize };
-  }
-}
-
-function hitTest(el: CanvasElement, px: number, py: number): boolean {
-  const b = getElementBounds(el);
-  const pad = 8;
-  return px >= b.x - pad && px <= b.x + b.w + pad && py >= b.y - pad && py <= b.y + b.h + pad;
-}
-
-function isInSelectionRect(el: CanvasElement, rect: SelectionRect): boolean {
-  const b = getElementBounds(el);
-  const sx = Math.min(rect.startX, rect.endX);
-  const sy = Math.min(rect.startY, rect.endY);
-  const sw = Math.abs(rect.endX - rect.startX);
-  const sh = Math.abs(rect.endY - rect.startY);
-  // Element overlaps selection rect
-  return !(b.x + b.w < sx || b.x > sx + sw || b.y + b.h < sy || b.y > sy + sh);
-}
+const reverseFontSizeMap: Record<number, FontSize> = {
+  16: "small",
+  24: "medium",
+  36: "large",
+};
 
 export function CanvasBoard({
   elements,
@@ -164,6 +66,7 @@ export function CanvasBoard({
   fontItalic,
   fontSize,
   bgColor,
+  onSelectionStyleChange,
 }: CanvasBoardProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -172,11 +75,77 @@ export function CanvasBoard({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [dragStart, setDragStart] = useState<Point | null>(null);
   const [selectionRect, setSelectionRect] = useState<SelectionRect | null>(null);
-  const [textInput, setTextInput] = useState<{ x: number; y: number; visible: boolean }>({
+  const [textInput, setTextInput] = useState<{ x: number; y: number; visible: boolean; editId?: string }>({
     x: 0, y: 0, visible: false,
   });
   const [textValue, setTextValue] = useState("");
-  const textInputRef = useRef<HTMLInputElement>(null);
+  const textInputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Zoom & Pan
+  const [scale, setScale] = useState(1);
+  const [panOffset, setPanOffset] = useState<Point>({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [panStart, setPanStart] = useState<Point | null>(null);
+  const [spaceHeld, setSpaceHeld] = useState(false);
+
+  // Track previous style props to apply to selection
+  const prevStyleRef = useRef({ strokeColor, fontBold, fontItalic, fontSize });
+
+  // Apply style changes to selected text elements
+  useEffect(() => {
+    const prev = prevStyleRef.current;
+    if (selectedIds.size === 0) {
+      prevStyleRef.current = { strokeColor, fontBold, fontItalic, fontSize };
+      return;
+    }
+
+    const changed =
+      prev.strokeColor !== strokeColor ||
+      prev.fontBold !== fontBold ||
+      prev.fontItalic !== fontItalic ||
+      prev.fontSize !== fontSize;
+
+    if (!changed) return;
+    prevStyleRef.current = { strokeColor, fontBold, fontItalic, fontSize };
+
+    let didChange = false;
+    const updated = elements.map((el) => {
+      if (!selectedIds.has(el.id)) return el;
+      didChange = true;
+      const base = { ...el, strokeColor };
+      if (el.type === "text") {
+        return {
+          ...base,
+          fontWeight: fontBold ? "bold" : "normal",
+          fontStyle: fontItalic ? "italic" : "normal",
+          fontSize: fontSizeMap[fontSize],
+        } as TextElement;
+      }
+      return base;
+    });
+    if (didChange) {
+      pushHistory();
+      onElementsChange(updated);
+    }
+  }, [strokeColor, fontBold, fontItalic, fontSize, selectedIds]);
+
+  // When selection changes, sync toolbar to selected element style
+  useEffect(() => {
+    if (selectedIds.size !== 1 || !onSelectionStyleChange) return;
+    const selId = Array.from(selectedIds)[0];
+    const el = elements.find((e) => e.id === selId);
+    if (!el) return;
+
+    const style: Parameters<NonNullable<typeof onSelectionStyleChange>>[0] = {
+      strokeColor: el.strokeColor,
+    };
+    if (el.type === "text") {
+      style.fontBold = el.fontWeight === "bold";
+      style.fontItalic = el.fontStyle === "italic";
+      style.fontSize = reverseFontSizeMap[el.fontSize] || "medium";
+    }
+    onSelectionStyleChange(style);
+  }, [selectedIds]);
 
   // Resize canvas
   useEffect(() => {
@@ -207,20 +176,27 @@ export function CanvasBoard({
     const w = container.clientWidth;
     const h = container.clientHeight;
 
-    // Background
+    ctx.save();
+    // Clear
     ctx.fillStyle = bgColor;
     ctx.fillRect(0, 0, w, h);
 
-    // Dot grid
+    // Dot grid (in screen space)
     ctx.fillStyle = "#dde1e7";
     const spacing = 20;
-    for (let x = spacing; x < w; x += spacing) {
-      for (let y = spacing; y < h; y += spacing) {
+    const gridOffX = (panOffset.x % (spacing * scale) + spacing * scale) % (spacing * scale);
+    const gridOffY = (panOffset.y % (spacing * scale) + spacing * scale) % (spacing * scale);
+    for (let x = gridOffX; x < w; x += spacing * scale) {
+      for (let y = gridOffY; y < h; y += spacing * scale) {
         ctx.beginPath();
         ctx.arc(x, y, 1, 0, Math.PI * 2);
         ctx.fill();
       }
     }
+
+    // Apply transform
+    ctx.translate(panOffset.x, panOffset.y);
+    ctx.scale(scale, scale);
 
     for (const el of elements) {
       drawElement(ctx, el, selectedIds.has(el.id));
@@ -229,12 +205,11 @@ export function CanvasBoard({
       drawElement(ctx, currentElement, false);
     }
 
-    // Draw selection rectangle
+    // Selection rectangle (in canvas coords)
     if (selectionRect) {
-      ctx.save();
       ctx.strokeStyle = "#3b82f6";
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = 1 / scale;
+      ctx.setLineDash([4 / scale, 4 / scale]);
       ctx.fillStyle = "rgba(59, 130, 246, 0.08)";
       const rx = Math.min(selectionRect.startX, selectionRect.endX);
       const ry = Math.min(selectionRect.startY, selectionRect.endY);
@@ -242,9 +217,11 @@ export function CanvasBoard({
       const rh = Math.abs(selectionRect.endY - selectionRect.startY);
       ctx.fillRect(rx, ry, rw, rh);
       ctx.strokeRect(rx, ry, rw, rh);
-      ctx.restore();
+      ctx.setLineDash([]);
     }
-  }, [elements, currentElement, selectedIds, selectionRect, bgColor]);
+
+    ctx.restore();
+  }, [elements, currentElement, selectedIds, selectionRect, bgColor, scale, panOffset]);
 
   useEffect(() => {
     redraw();
@@ -252,18 +229,34 @@ export function CanvasBoard({
 
   // Keyboard shortcuts
   useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => {
-      if (textInput.visible) return;
-
-      // Undo/Redo
-      if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === "Space" && !textInput.visible) {
         e.preventDefault();
-        onUndo();
+        setSpaceHeld(true);
         return;
       }
+      if (textInput.visible) return;
+
+      if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
+        e.preventDefault(); onUndo(); return;
+      }
       if ((e.ctrlKey || e.metaKey) && (e.key === "Z" || (e.key === "z" && e.shiftKey))) {
+        e.preventDefault(); onRedo(); return;
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === "=" || e.key === "+")) {
         e.preventDefault();
-        onRedo();
+        setScale((s) => Math.min(MAX_SCALE, s * 1.2));
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "-") {
+        e.preventDefault();
+        setScale((s) => Math.max(MIN_SCALE, s / 1.2));
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "0") {
+        e.preventDefault();
+        setScale(1);
+        setPanOffset({ x: 0, y: 0 });
         return;
       }
       if (e.ctrlKey || e.metaKey) return;
@@ -288,33 +281,84 @@ export function CanvasBoard({
         setSelectionRect(null);
       }
     };
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === "Space") setSpaceHeld(false);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
   }, [activeTool, selectedIds, elements, onElementsChange, onToolChange, textInput.visible, onUndo, onRedo, pushHistory]);
 
-  const getCanvasPoint = (e: React.MouseEvent): Point => {
+  // Wheel zoom
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const handleWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const rect = container.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+        const delta = e.deltaY > 0 ? 0.9 : 1.1;
+        const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale * delta));
+        const ratio = newScale / scale;
+        setPanOffset({
+          x: mx - ratio * (mx - panOffset.x),
+          y: my - ratio * (my - panOffset.y),
+        });
+        setScale(newScale);
+      } else {
+        // Pan with wheel
+        setPanOffset((p) => ({ x: p.x - e.deltaX, y: p.y - e.deltaY }));
+      }
+    };
+    container.addEventListener("wheel", handleWheel, { passive: false });
+    return () => container.removeEventListener("wheel", handleWheel);
+  }, [scale, panOffset]);
+
+  const screenToCanvas = (e: React.MouseEvent): Point => {
     const canvas = canvasRef.current!;
     const rect = canvas.getBoundingClientRect();
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    return {
+      x: (sx - panOffset.x) / scale,
+      y: (sy - panOffset.y) / scale,
+    };
   };
 
+  const canvasToScreen = (p: Point): Point => ({
+    x: p.x * scale + panOffset.x,
+    y: p.y * scale + panOffset.y,
+  });
+
+  const getCtx = () => canvasRef.current?.getContext("2d") ?? null;
+
   const handleMouseDown = (e: React.MouseEvent) => {
-    const point = getCanvasPoint(e);
+    // Space+drag = pan
+    if (spaceHeld || e.button === 1) {
+      setIsPanning(true);
+      setPanStart({ x: e.clientX, y: e.clientY });
+      return;
+    }
+
+    const point = screenToCanvas(e);
+    const ctx = getCtx();
 
     if (activeTool === "select") {
-      // Check hit on existing element
       let hit: CanvasElement | null = null;
       for (let i = elements.length - 1; i >= 0; i--) {
-        if (hitTest(elements[i], point.x, point.y)) {
-          hit = elements[i];
-          break;
+        if (hitTest(elements[i], point.x, point.y, ctx ?? undefined)) {
+          hit = elements[i]; break;
         }
       }
       if (hit) {
         setSelectedIds(new Set([hit.id]));
         setDragStart(point);
       } else {
-        // Start area selection
         setSelectedIds(new Set());
         setSelectionRect({ startX: point.x, startY: point.y, endX: point.x, endY: point.y });
       }
@@ -323,7 +367,7 @@ export function CanvasBoard({
 
     if (activeTool === "eraser") {
       for (let i = elements.length - 1; i >= 0; i--) {
-        if (hitTest(elements[i], point.x, point.y)) {
+        if (hitTest(elements[i], point.x, point.y, ctx ?? undefined)) {
           pushHistory();
           onElementsChange(elements.filter((_, idx) => idx !== i));
           break;
@@ -343,42 +387,45 @@ export function CanvasBoard({
     pushHistory();
 
     if (activeTool === "pen") {
-      const el: PenElement = {
+      setCurrentElement({
         id: generateId(), type: "pen", x: point.x, y: point.y,
         points: [point], strokeColor, strokeWidth,
-      };
-      setCurrentElement(el);
+      } as PenElement);
     } else if (activeTool === "line") {
-      const el: LineElement = {
+      setCurrentElement({
         id: generateId(), type: "line", x: point.x, y: point.y,
         endX: point.x, endY: point.y, strokeColor, strokeWidth,
-      };
-      setCurrentElement(el);
+      } as LineElement);
     } else if (activeTool === "rectangle") {
-      const el: RectangleElement = {
+      setCurrentElement({
         id: generateId(), type: "rectangle", x: point.x, y: point.y,
         width: 0, height: 0, strokeColor, strokeWidth, fillColor: "transparent",
-      };
-      setCurrentElement(el);
+      } as RectangleElement);
     } else if (activeTool === "ellipse") {
-      const el: EllipseElement = {
+      setCurrentElement({
         id: generateId(), type: "ellipse", x: point.x, y: point.y,
         radiusX: 0, radiusY: 0, strokeColor, strokeWidth, fillColor: "transparent",
-      };
-      setCurrentElement(el);
+      } as EllipseElement);
     }
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    const point = getCanvasPoint(e);
+    // Panning
+    if (isPanning && panStart) {
+      const dx = e.clientX - panStart.x;
+      const dy = e.clientY - panStart.y;
+      setPanStart({ x: e.clientX, y: e.clientY });
+      setPanOffset((p) => ({ x: p.x + dx, y: p.y + dy }));
+      return;
+    }
 
-    // Area selection drag
+    const point = screenToCanvas(e);
+
     if (activeTool === "select" && selectionRect && !dragStart) {
       setSelectionRect({ ...selectionRect, endX: point.x, endY: point.y });
       return;
     }
 
-    // Dragging selected elements
     if (activeTool === "select" && dragStart && selectedIds.size > 0) {
       const dx = point.x - dragStart.x;
       const dy = point.y - dragStart.y;
@@ -388,17 +435,10 @@ export function CanvasBoard({
           if (!selectedIds.has(el.id)) return el;
           const moved = { ...el, x: el.x + dx, y: el.y + dy };
           if (moved.type === "pen") {
-            return {
-              ...moved,
-              points: (el as PenElement).points.map((p) => ({ x: p.x + dx, y: p.y + dy })),
-            } as PenElement;
+            return { ...moved, points: (el as PenElement).points.map((p) => ({ x: p.x + dx, y: p.y + dy })) } as PenElement;
           }
           if (moved.type === "line") {
-            return {
-              ...moved,
-              endX: (el as LineElement).endX + dx,
-              endY: (el as LineElement).endY + dy,
-            } as LineElement;
+            return { ...moved, endX: (el as LineElement).endX + dx, endY: (el as LineElement).endY + dy } as LineElement;
           }
           return moved;
         })
@@ -415,22 +455,22 @@ export function CanvasBoard({
     } else if (currentElement.type === "rectangle") {
       setCurrentElement({ ...currentElement, width: point.x - currentElement.x, height: point.y - currentElement.y });
     } else if (currentElement.type === "ellipse") {
-      setCurrentElement({
-        ...currentElement, radiusX: (point.x - currentElement.x) / 2, radiusY: (point.y - currentElement.y) / 2,
-      } as EllipseElement);
+      setCurrentElement({ ...currentElement, radiusX: (point.x - currentElement.x) / 2, radiusY: (point.y - currentElement.y) / 2 } as EllipseElement);
     }
   };
 
   const handleMouseUp = () => {
-    // Finish area selection
+    if (isPanning) {
+      setIsPanning(false);
+      setPanStart(null);
+      return;
+    }
     if (selectionRect) {
       const selected = elements.filter((el) => isInSelectionRect(el, selectionRect));
       setSelectedIds(new Set(selected.map((el) => el.id)));
       setSelectionRect(null);
     }
-    if (dragStart) {
-      setDragStart(null);
-    }
+    if (dragStart) setDragStart(null);
     if (isDrawing && currentElement) {
       onElementsChange([...elements, currentElement]);
       setCurrentElement(null);
@@ -438,8 +478,40 @@ export function CanvasBoard({
     setIsDrawing(false);
   };
 
+  // Double-click to edit text
+  const handleDoubleClick = (e: React.MouseEvent) => {
+    const point = screenToCanvas(e);
+    const ctx = getCtx();
+    for (let i = elements.length - 1; i >= 0; i--) {
+      const el = elements[i];
+      if (el.type === "text" && hitTest(el, point.x, point.y, ctx ?? undefined)) {
+        setTextInput({ x: el.x, y: el.y, visible: true, editId: el.id });
+        setTextValue(el.text);
+        setSelectedIds(new Set([el.id]));
+        setTimeout(() => textInputRef.current?.focus(), 50);
+        return;
+      }
+    }
+  };
+
   const handleTextSubmit = () => {
-    if (textValue.trim()) {
+    if (textInput.editId) {
+      // Editing existing text
+      if (textValue.trim()) {
+        pushHistory();
+        onElementsChange(
+          elements.map((el) =>
+            el.id === textInput.editId && el.type === "text"
+              ? { ...el, text: textValue } as TextElement
+              : el
+          )
+        );
+      } else {
+        // Empty = delete
+        pushHistory();
+        onElementsChange(elements.filter((el) => el.id !== textInput.editId));
+      }
+    } else if (textValue.trim()) {
       pushHistory();
       const el: TextElement = {
         id: generateId(), type: "text", x: textInput.x, y: textInput.y,
@@ -453,6 +525,14 @@ export function CanvasBoard({
     setTextValue("");
   };
 
+  const textScreenPos = canvasToScreen({ x: textInput.x, y: textInput.y });
+
+  // Determine current editing text element for styling the textarea
+  const editingEl = textInput.editId ? elements.find((e) => e.id === textInput.editId) as TextElement | undefined : undefined;
+  const currentFontSize = editingEl ? editingEl.fontSize : fontSizeMap[fontSize];
+  const currentBold = editingEl ? editingEl.fontWeight === "bold" : fontBold;
+  const currentItalic = editingEl ? editingEl.fontStyle === "italic" : fontItalic;
+
   return (
     <div ref={containerRef} className="w-full h-full relative overflow-hidden" style={{ backgroundColor: bgColor }}>
       <canvas
@@ -462,40 +542,66 @@ export function CanvasBoard({
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
+        onDoubleClick={handleDoubleClick}
         style={{
           cursor:
-            activeTool === "select" ? "default"
+            spaceHeld || isPanning ? "grab"
+            : activeTool === "select" ? "default"
             : activeTool === "text" ? "text"
             : activeTool === "eraser" ? "pointer"
             : "crosshair",
         }}
       />
       {textInput.visible && (
-        <input
+        <textarea
           ref={textInputRef}
-          type="text"
           value={textValue}
           onChange={(e) => setTextValue(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") handleTextSubmit();
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleTextSubmit(); }
             if (e.key === "Escape") {
               setTextInput({ x: 0, y: 0, visible: false });
               setTextValue("");
             }
           }}
           onBlur={handleTextSubmit}
-          className="absolute z-30 border-2 border-primary bg-card px-2 py-1 text-foreground outline-none rounded-md"
+          className="absolute z-30 border-2 border-primary bg-card px-2 py-1 text-foreground outline-none rounded-md resize-none"
           style={{
-            left: textInput.x,
-            top: textInput.y,
-            minWidth: 120,
-            fontSize: fontSizeMap[fontSize],
-            fontWeight: fontBold ? "bold" : "normal",
-            fontStyle: fontItalic ? "italic" : "normal",
+            left: textScreenPos.x,
+            top: textScreenPos.y,
+            minWidth: 150,
+            maxWidth: 400,
+            minHeight: 36,
+            fontSize: currentFontSize * scale,
+            fontWeight: currentBold ? "bold" : "normal",
+            fontStyle: currentItalic ? "italic" : "normal",
+            transformOrigin: "top left",
           }}
-          placeholder="Type text..."
+          placeholder="Type text... (Shift+Enter for new line)"
         />
       )}
+
+      {/* Zoom indicator */}
+      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 rounded-lg bg-toolbar px-3 py-1.5 shadow-md">
+        <button
+          onClick={() => setScale((s) => Math.max(MIN_SCALE, s / 1.2))}
+          className="text-toolbar-foreground hover:text-toolbar-active-foreground text-sm font-bold px-1"
+        >
+          −
+        </button>
+        <button
+          onClick={() => { setScale(1); setPanOffset({ x: 0, y: 0 }); }}
+          className="text-toolbar-foreground hover:text-toolbar-active-foreground text-xs font-semibold min-w-[48px] text-center"
+        >
+          {Math.round(scale * 100)}%
+        </button>
+        <button
+          onClick={() => setScale((s) => Math.min(MAX_SCALE, s * 1.2))}
+          className="text-toolbar-foreground hover:text-toolbar-active-foreground text-sm font-bold px-1"
+        >
+          +
+        </button>
+      </div>
     </div>
   );
 }
