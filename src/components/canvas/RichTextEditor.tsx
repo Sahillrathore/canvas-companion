@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from "react";
+import { useRef, useEffect, useCallback, useState } from "react";
 import { TextSpan } from "@/lib/canvas-types";
 import { spansToHtml, htmlToSpans } from "@/lib/canvas-drawing";
 
@@ -13,7 +13,6 @@ interface RichTextEditorProps {
   screenY: number;
   onSave: (spans: TextSpan[], plainText: string) => void;
   onCancel: () => void;
-  /** Called when toolbar formatting is applied externally */
   editorRef?: React.MutableRefObject<HTMLDivElement | null>;
 }
 
@@ -32,29 +31,37 @@ export function RichTextEditor({
 }: RichTextEditorProps) {
   const innerRef = useRef<HTMLDivElement>(null);
   const ref = editorRef || innerRef;
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     el.innerHTML = spansToHtml(spans, defaultColor);
-    el.focus();
-    // Move cursor to end
-    const range = document.createRange();
-    range.selectNodeContents(el);
-    range.collapse(false);
-    const sel = window.getSelection();
-    sel?.removeAllRanges();
-    sel?.addRange(range);
+
+    // Delay focus slightly to avoid immediate blur from canvas mouseup
+    const timer = setTimeout(() => {
+      el.focus();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+      setReady(true);
+    }, 50);
+
+    return () => clearTimeout(timer);
   }, []); // only on mount
 
   const save = useCallback(() => {
+    if (!ready) return; // Ignore blur before editor is ready
     const el = ref.current;
     if (!el) return;
     const html = el.innerHTML;
     const parsed = htmlToSpans(html, defaultColor, defaultBold, defaultItalic);
     const plainText = parsed.map(s => s.text).join("");
     onSave(parsed, plainText);
-  }, [defaultColor, defaultBold, defaultItalic, onSave, ref]);
+  }, [defaultColor, defaultBold, defaultItalic, onSave, ref, ready]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") {
@@ -62,14 +69,11 @@ export function RichTextEditor({
       onCancel();
       return;
     }
-    // Don't submit on Enter - allow multiline. Use Escape to cancel, click away to save.
-    // But we can use Ctrl+Enter to save
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       save();
       return;
     }
-    // Prevent canvas shortcuts while editing
     e.stopPropagation();
   };
 
@@ -80,19 +84,24 @@ export function RichTextEditor({
       suppressContentEditableWarning
       onKeyDown={handleKeyDown}
       onBlur={save}
-      className="absolute z-30 border-2 border-primary bg-card text-foreground outline-none rounded-md px-2 py-1"
+      className="absolute z-30 outline-none"
       style={{
         left: screenX,
         top: screenY,
-        minWidth: 150,
+        minWidth: 2,
         maxWidth: 400,
-        minHeight: 36,
+        minHeight: fontSize * scale * 1.3,
         fontSize: fontSize * scale,
         lineHeight: 1.3,
         whiteSpace: "pre-wrap",
         wordBreak: "break-word",
         transformOrigin: "top left",
         color: defaultColor,
+        caretColor: defaultColor,
+        background: "transparent",
+        border: `1.5px dashed hsl(var(--primary) / 0.4)`,
+        borderRadius: 2,
+        padding: "1px 2px",
       }}
     />
   );
