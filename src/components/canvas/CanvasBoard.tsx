@@ -210,7 +210,12 @@ export function CanvasBoard({
     ctx.fillStyle = bgColor;
     ctx.fillRect(0, 0, w, h);
 
-    ctx.fillStyle = "#dde1e7";
+    console.log(bgColor)
+
+    ctx.fillStyle =
+      bgColor !== "#0f172a" && bgColor !== "#1e293b"
+        ? "#dde1e7"
+        : "#545454";
     const spacing = 20;
     const gridOffX = (panOffset.x % (spacing * scale) + spacing * scale) % (spacing * scale);
     const gridOffY = (panOffset.y % (spacing * scale) + spacing * scale) % (spacing * scale);
@@ -623,10 +628,10 @@ export function CanvasBoard({
         style={{
           cursor:
             spaceHeld || isPanning ? "grab"
-            : activeTool === "select" ? "default"
-            : activeTool === "text" ? "text"
-            : activeTool === "eraser" ? "pointer"
-            : "crosshair",
+              : activeTool === "select" ? "default"
+                : activeTool === "text" ? "text"
+                  : activeTool === "eraser" ? "pointer"
+                    : "crosshair",
         }}
       />
       {textEdit.visible && (
